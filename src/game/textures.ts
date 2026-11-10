@@ -11,7 +11,8 @@ export type Side = 'p' | 'e';
 
 const PALETTE: Record<Side, { cloth: number; armor: number; skin: number; leg: number }> = {
   p: { cloth: 0x3e6fb0, armor: 0x9dbde8, skin: 0xe8c39a, leg: 0x232833 },
-  e: { cloth: 0xa8402f, armor: 0xe0907c, skin: 0xe8c39a, leg: 0x232833 }
+  // 敌方提亮一档：原来的暗红在深色战场底上几乎看不出兵种
+  e: { cloth: 0xd0503a, armor: 0xffc0a6, skin: 0xe8c39a, leg: 0x232833 }
 };
 
 export function textureKey(code: string, side: Side): string {

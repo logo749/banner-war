@@ -51,6 +51,11 @@ startBtn.style.cssText =
   'background:#1b2432;color:#cfd6e6;font-size:12px;z-index:6;';
 startBtn.addEventListener('click', () => {
   if (!battle.ready || battle.running) return;
+  // 敌军在布阵阶段就摆好了，上一两张去打必输，先拦住并要求至少 3 张
+  if (battle.playerCount() < 3) {
+    battle.flashTip(`至少上 3 张兵牌（现在 ${battle.playerCount()} 张）`);
+    return;
+  }
   battle.start();
   startBtn.disabled = true;
   startBtn.style.opacity = '0.45';
