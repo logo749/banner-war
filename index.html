@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, maximum-scale=1"
+    />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>竖屏兵牌战役 · Banner War</title>
+    <style>
+      :root {
+        --stage-w: 360px;
+        --stage-h: 780px;
+        --hand-h: 160px;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0d12;
+        overflow: hidden;
+        overscroll-behavior: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+        font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #stage {
+        position: relative;
+        width: var(--stage-w);
+        height: var(--stage-h);
+        max-width: 100vw;
+        max-height: 100vh;
+        background: #0d1017;
+        overflow: hidden;
+      }
+      #canvas-host,
+      #canvas-host canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #canvas-host canvas {
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        touch-action: none;
+      }
+      #input-layer {
+        position: absolute;
+        inset: 0;
+        touch-action: none;
+      }
+      #hand {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: var(--hand-h);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 0 8px;
+        box-sizing: border-box;
+        background: linear-gradient(180deg, rgba(9, 11, 16, 0) 0%, #090b10 26%, #090b10 100%);
+      }
+      .card {
+        flex: 1 1 0;
+        max-width: 62px;
+        min-width: 0;
+        height: 112px;
+        border-radius: 6px;
+        border: 1px solid #39415a;
+        background: #141a26;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        padding-top: 4px;
+        box-sizing: border-box;
+        color: #cfd6e6;
+        font-size: 10px;
+        line-height: 1.25;
+        transition: border-color 90ms linear, transform 90ms linear;
+      }
+      .card.selected {
+        border-color: #d8a566;
+        transform: translateY(-4px);
+      }
+      .card span {
+        width: 48px;
+        height: 48px;
+        image-rendering: pixelated;
+      }
+      #ghost {
+        position: absolute;
+        width: 48px;
+        height: 48px;
+        margin: -24px 0 0 -24px;
+        image-rendering: pixelated;
+        pointer-events: none;
+        opacity: 0.9;
+        display: none;
+        z-index: 5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="canvas-host"></div>
+      <div id="input-layer"></div>
+      <img id="ghost" alt="" />
+      <div id="hand"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
