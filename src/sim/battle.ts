@@ -9,9 +9,12 @@ export interface Squad {
   code: string;
   /** 当前人数，可为小数（残部推进时会出现） */
   men: number;
+  /** 跨 tick 稳定的身份，用来把结算槽位映射回画面兵牌 */
+  id?: string;
 }
 
 interface Slot {
+  id: string;
   code: string;
   men0: number;
   hp: number;
@@ -25,17 +28,32 @@ export interface Battle {
   ticks: number;
   readonly limit: number;
   done: boolean;
+  /** 冲锋号剩余 tick；>0 时攻方每 tick 伤害 ×HORN_MULT */
+  hornTicks: number;
+  /** 每场只能吹一次，过期也不能再吹 */
+  hornUsed: boolean;
   step(): void;
+  /** 攻方总血量基数（投预备队后会变大，剩余比例以它作分母） */
+  attHp0Total(): number;
   /** 攻方剩余血量比例（0–1） */
   attRemain(): number;
   dfnRemain(): number;
   winner(): 'att' | 'dfn' | null;
+  /** 变阵：把最前排与最后排换位，挨打的人和出手顺序同时改变 */
+  swapFrontBack(): boolean;
+  /** 投预备队：把一支新兵牌追加进攻方，立刻参与结算 */
+  addReserve(squad: Squad): boolean;
+  /** 冲锋号：接下来 HORN_TICKS 个 tick 攻方伤害提升 */
+  horn(): boolean;
 }
 
+export const HORN_TICKS = 6;
+export const HORN_MULT = 1.45;
+
 function makeSlots(list: Squad[]): Slot[] {
-  return list.map((s) => {
+  return list.map((s, i) => {
     const hp = s.men * UNITS[s.code].hp;
-    return { code: s.code, men0: s.men, hp, hp0: hp, dead: false };
+    return { id: s.id ?? `${s.code}#${i}`, code: s.code, men0: s.men, hp, hp0: hp, dead: false };
   });
 }
 
@@ -56,7 +74,7 @@ function outputOf(slot: Slot, targetCode: string): number {
 export function createBattle(att: Squad[], dfn: Squad[], limit = MAX_TICK): Battle {
   const a = makeSlots(att);
   const b = makeSlots(dfn);
-  const attHp0 = a.reduce((s, x) => s + x.hp0, 0);
+  let attHp0 = a.reduce((s, x) => s + x.hp0, 0);
   const dfnHp0 = b.reduce((s, x) => s + x.hp0, 0);
 
   const battle: Battle = {
@@ -65,6 +83,8 @@ export function createBattle(att: Squad[], dfn: Squad[], limit = MAX_TICK): Batt
     ticks: 0,
     limit,
     done: false,
+    hornTicks: 0,
+    hornUsed: false,
     step() {
       if (battle.done || battle.ticks >= limit) {
         battle.done = true;
@@ -80,10 +100,12 @@ export function createBattle(att: Squad[], dfn: Squad[], limit = MAX_TICK): Batt
       const targetOfA = b[bf].code;
       const targetOfB = a[af].code;
 
+      const mult = battle.hornTicks > 0 ? HORN_MULT : 1;
       let dmgToB = 0;
-      for (const s of a) dmgToB += outputOf(s, targetOfA);
+      for (const s of a) dmgToB += outputOf(s, targetOfA) * mult;
       let dmgToA = 0;
       for (const s of b) dmgToA += outputOf(s, targetOfB);
+      if (battle.hornTicks > 0) battle.hornTicks -= 1;
 
       // 与脚本一致：不做 0 截断，超额伤害保留为负值，剩余比例按原样求和。
       a[af].hp -= dmgToA;
@@ -91,7 +113,31 @@ export function createBattle(att: Squad[], dfn: Squad[], limit = MAX_TICK): Batt
 
       if (firstAlive(a) < 0 || firstAlive(b) < 0) battle.done = true;
     },
+    swapFrontBack() {
+      if (battle.done || a.length < 2) return false;
+      const front = a.shift();
+      if (!front) return false;
+      a.push(front);
+      return true;
+    },
+    addReserve(squad) {
+      if (battle.done) return false;
+      if (a.some((s) => s.id === squad.id)) return false;
+      const slot = makeSlots([squad])[0];
+      a.push(slot);
+      attHp0 += slot.hp0;
+      return true;
+    },
+    horn() {
+      if (battle.done || battle.hornUsed) return false;
+      battle.hornUsed = true;
+      battle.hornTicks = HORN_TICKS;
+      return true;
+    },
     // 与脚本同口径：阵亡兵牌的负血量不清零，直接参与求和，再整体取 max(…, 0)。
+    attHp0Total() {
+      return attHp0;
+    },
     attRemain() {
       if (attHp0 <= 0) return 0;
       return Math.max(a.reduce((s, x) => s + x.hp, 0), 0) / attHp0;
