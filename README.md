@@ -1,5 +1,7 @@
 # 竖屏兵牌战役 · Banner War
 
+[![Deploy to GitHub Pages](https://github.com/logo749/banner-war/actions/workflows/deploy.yml/badge.svg)](https://github.com/logo749/banner-war/actions/workflows/deploy.yml)
+
 骑马与砍杀式的「兵种指挥 + 部队养成」，竖屏、单手、Web 手机浏览器。
 单局 roguelite：8 层地图、随机三选一招募、遗物改规则，打穿最后一层攻城就算通关。
 
@@ -42,7 +44,7 @@ docs/                设计、排期、技术、素材四份文档
 
 ## 部署
 
-推送到 `main` 后，GitHub Actions 会自动构建并发布到 GitHub Pages。
+推送到 `main` 后，GitHub Actions 会自动构建、跑数值回归并发布到 GitHub Pages。
 仓库 Settings → Pages → Source 选 **GitHub Actions** 一次，之后每次推送自动更新。
 
 ## 文档
