@@ -1,23 +1,23 @@
 /**
- * 战场场景：只负责画格子、画兵牌、按 tick 推进结算并刷新人数条。
+ * 战场场景：只负责画格子、画兵牌、按 tick 推进结算、刷新人数条，以及不改变规则的动作表演。
  * 所有规则都在 src/sim/ 里，这里不写任何数值。
  */
 import Phaser from 'phaser';
 import { ENEMY_ROWS, FIELD, GRID, LOGICAL, PLAYER_ROWS, TICK_SEC } from '../config';
 import { UNITS } from '../sim/units';
-import { armyCp, createBattle, type Battle, type Squad } from '../sim/battle';
+import { armyCp, createBattle, HORN_MULT, type Battle, type Squad } from '../sim/battle';
 import { buildUnitTextures, textureKey, type Side } from './textures';
 
 const BAR_W = 44;
 
-/** 本关敌军的实际编成：布阵阶段就摆在敌区，预览即实际编成，不临场再抽。
- *  标定依据：对标准 5 张（A1 A2 B2 B2 C1，战力 954）战损 52%、38 tick（15.2s），
- *  落在 docs/plan.md M1 的「15–25 秒、余兵 14%–50%」区间内。*/
-const ENEMY_FORMATION = ['A3', 'B2', 'C1', 'C2'];
-const ENEMY_COLS = [1, 2, 0, 3];
-const ENEMY_ROW_SLOTS = [3, 2, 1, 0];
+export interface BattleEnd {
+  win: boolean;
+  survivors: Array<{ id: string; men: number }>;
+  ticks: number;
+}
 
 interface Placed {
+  id: string;
   code: string;
   col: number;
   row: number;
@@ -26,7 +26,9 @@ interface Placed {
   bar: Phaser.GameObjects.Rectangle;
   barBg: Phaser.GameObjects.Rectangle;
   index: number;
-  /** 站位基准点：所有动作都以它为中心来回，避免动画把兵牌越漂越偏 */
+  /** 上场时的人数（可能是残部），结算按它算而不是满编 */
+  men: number;
+  /** 站位基准点：所有动作都以它为中心来回，避免动画越飘越偏 */
   baseX: number;
   baseY: number;
   dead: boolean;
@@ -42,6 +44,12 @@ export class BattleScene extends Phaser.Scene {
   private hud!: Phaser.GameObjects.Text;
   private tip!: Phaser.GameObjects.Text;
   private resultText?: Phaser.GameObjects.Text;
+  private enemyComp: string[] = [];
+  private layer = 1;
+  private onEnd?: (r: BattleEnd) => void;
+  private ended = false;
+  /** 三个战中动作每场各一次 */
+  private used = { swap: false, horn: false, reserve: false };
 
   constructor() {
     super('battle');
@@ -50,14 +58,13 @@ export class BattleScene extends Phaser.Scene {
   create() {
     buildUnitTextures(this);
     this.drawField();
-    this.spawnEnemy();
     this.hud = this.add.text(10, 12, '', {
       fontFamily: 'ui-monospace, monospace',
       fontSize: '11px',
       color: '#8fa1bf'
     });
     this.tip = this.add
-      .text(LOGICAL.w / 2, 36, '长按兵牌拖到第 6–8 行', {
+      .text(LOGICAL.w / 2, 36, '', {
         fontFamily: 'sans-serif',
         fontSize: '10px',
         color: '#5f6a80'
@@ -65,6 +72,28 @@ export class BattleScene extends Phaser.Scene {
       .setOrigin(0.5, 0);
     this.refreshHud();
     this.ready = true;
+  }
+
+  /** 开一场新的：清掉上一场的一切，按本层敌配重新摆敌阵 */
+  reset(enemy: string[], layer: number, onEnd: (r: BattleEnd) => void) {
+    this.enemyComp = enemy;
+    this.layer = layer;
+    this.onEnd = onEnd;
+    this.battle = null;
+    this.ended = false;
+    this.acc = 0;
+    this.used = { swap: false, horn: false, reserve: false };
+    for (const p of this.placed) {
+      p.sprite.destroy();
+      p.bar.destroy();
+      p.barBg.destroy();
+    }
+    this.placed = [];
+    this.resultText?.destroy();
+    this.resultText = undefined;
+    this.tip.setText('长按兵牌拖到第 6–8 行').setColor('#5f6a80').setVisible(true);
+    this.spawnEnemy();
+    this.refreshHud();
   }
 
   private drawField() {
@@ -113,7 +142,7 @@ export class BattleScene extends Phaser.Scene {
     return this.placed.some((p) => p.col === col && p.row === row);
   }
 
-  placePlayer(code: string, col: number, row: number): boolean {
+  placePlayer(code: string, col: number, row: number, id: string, men = UNITS[code].men): boolean {
     if (!(PLAYER_ROWS as readonly number[]).includes(row)) return false;
     if (this.occupied(col, row)) return false;
     if (this.battle) return false;
@@ -125,7 +154,22 @@ export class BattleScene extends Phaser.Scene {
     sprite.setScale(0.85);
     sprite.setY(pos.y + 3);
     this.tweens.add({ targets: sprite, scaleX: 1, scaleY: 1, y: pos.y, duration: 160, ease: 'Quad.easeOut' });
-    this.placed.push({ code, col, row, side: 'p', sprite, bar, barBg, index: -1, baseX: pos.x, baseY: pos.y, dead: false, lastHp: 0 });
+    this.placed.push({
+      id,
+      code,
+      col,
+      row,
+      side: 'p',
+      sprite,
+      bar,
+      barBg,
+      index: -1,
+      men,
+      baseX: pos.x,
+      baseY: pos.y,
+      dead: false,
+      lastHp: 0
+    });
     this.tip.setVisible(false);
     this.refreshHud();
     return true;
@@ -154,16 +198,57 @@ export class BattleScene extends Phaser.Scene {
     return this.battle !== null && !this.battle.done;
   }
 
-  /** 布阵阶段就把本关敌军摆出来，玩家能看着敌阵选兵；开战时直接复用这批，不另生成。 */
+  get finished(): boolean {
+    return this.battle !== null && this.battle.done;
+  }
+
+  /** 布阵阶段就把本层敌军摆出来，玩家能看着敌阵选兵；开战时直接复用这批 */
   private spawnEnemy() {
-    ENEMY_FORMATION.forEach((code, i) => {
-      const col = ENEMY_COLS[i % ENEMY_COLS.length];
-      const row = ENEMY_ROW_SLOTS[i % ENEMY_ROW_SLOTS.length];
+    // 近战/骑站前排（第 3 行），弓手退到后排（第 1 行）：一眼能看出这是一支有阵型的军队
+    const frontSlots = [
+      { col: 1, row: 3 },
+      { col: 2, row: 3 },
+      { col: 0, row: 3 },
+      { col: 3, row: 3 },
+      { col: 1, row: 2 },
+      { col: 2, row: 2 }
+    ];
+    const backSlots = [
+      { col: 1, row: 1 },
+      { col: 2, row: 1 },
+      { col: 0, row: 0 },
+      { col: 3, row: 0 },
+      { col: 0, row: 2 },
+      { col: 3, row: 2 }
+    ];
+    const order = [...this.enemyComp];
+    let fi = 0;
+    let bi = 0;
+    order.forEach((code, i) => {
+      const isRanged = UNITS[code].line === 'rng';
+      const slot = isRanged ? backSlots[bi++ % backSlots.length] : frontSlots[fi++ % frontSlots.length];
+      const col = slot.col;
+      const row = slot.row;
       const pos = this.cellCenter(col, row);
       const sprite = this.add.image(pos.x, pos.y, textureKey(code, 'e')).setDisplaySize(64, 64);
       const barBg = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x000000, 0.6).setOrigin(0, 0.5);
       const bar = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x62c06a).setOrigin(0, 0.5);
-      this.placed.push({ code, col, row, side: 'e', sprite, bar, barBg, index: -1, baseX: pos.x, baseY: pos.y, dead: false, lastHp: 0 });
+      this.placed.push({
+        id: `e${i}`,
+        code,
+        col,
+        row,
+        side: 'e',
+        sprite,
+        bar,
+        barBg,
+        index: i,
+        men: UNITS[code].men,
+        baseX: pos.x,
+        baseY: pos.y,
+        dead: false,
+        lastHp: 0
+      });
     });
   }
 
@@ -173,8 +258,8 @@ export class BattleScene extends Phaser.Scene {
     const enemies = this.placed.filter((p) => p.side === 'e');
     if (players.length === 0 || enemies.length === 0) return;
 
-    const playerSquads: Squad[] = players.map((p) => ({ code: p.code, men: UNITS[p.code].men }));
-    const enemySquads: Squad[] = enemies.map((p) => ({ code: p.code, men: UNITS[p.code].men }));
+    const playerSquads: Squad[] = players.map((p) => ({ code: p.code, men: p.men, id: p.id }));
+    const enemySquads: Squad[] = enemies.map((p) => ({ code: p.code, men: p.men, id: p.id }));
     players.forEach((p, i) => (p.index = i));
     enemies.forEach((p, i) => (p.index = i));
 
@@ -186,6 +271,125 @@ export class BattleScene extends Phaser.Scene {
     }
     this.refreshHud();
     this.drumRoll();
+  }
+
+  // ---- 战中三动作：额度各一次，规则改动都发生在 sim 里 ----
+
+  canSwap(): boolean {
+    return !!this.battle && !this.ended && !this.used.swap;
+  }
+
+  canHorn(): boolean {
+    return !!this.battle && !this.ended && !this.used.horn;
+  }
+
+  canReserve(): boolean {
+    return !!this.battle && !this.ended && !this.used.reserve;
+  }
+
+  /** 变阵：最前排退到队尾，前后排换位，挨打的人跟着换 */
+  swap(): boolean {
+    if (!this.canSwap() || !this.battle) return false;
+    const before = this.battle.att.map((s) => s.id);
+    if (!this.battle.swapFrontBack()) return false;
+    this.used.swap = true;
+    this.battle.att.forEach((s, i) => {
+      const u = this.placed.find((p) => p.side === 'p' && p.id === s.id);
+      if (u) u.index = i;
+    });
+    const front = this.placed.find((p) => p.side === 'p' && p.id === before[0]);
+    const back = this.placed.find((p) => p.side === 'p' && p.id === before[before.length - 1]);
+    if (front && back) {
+      const tmp = { col: front.col, row: front.row, x: front.baseX, y: front.baseY };
+      this.moveTo(front, back.baseX, back.baseY, back.col, back.row);
+      this.moveTo(back, tmp.x, tmp.y, tmp.col, tmp.row);
+    }
+    this.flashBanner('变阵');
+    this.refreshHud();
+    return true;
+  }
+
+  /** 冲锋号：接下来 6 tick 全军伤害 ×1.45 */
+  horn(): boolean {
+    if (!this.canHorn() || !this.battle) return false;
+    if (!this.battle.horn()) return false;
+    this.used.horn = true;
+    this.cameras.main.flash(120, 255, 220, 130);
+    this.flashBanner(`冲锋号 ×${HORN_MULT}`);
+    this.refreshHud();
+    return true;
+  }
+
+  /** 投预备队：把一张没上场的牌补进空位，立刻参与结算 */
+  addReserve(id: string, code: string, men: number): boolean {
+    if (!this.canReserve() || !this.battle) return false;
+    if (this.placed.some((p) => p.id === id)) return false;
+    let slot: { col: number; row: number } | null = null;
+    for (const row of [5, 6, 7]) {
+      for (let col = 0; col < GRID.cols; col += 1) {
+        if (!this.occupied(col, row)) {
+          slot = { col, row };
+          break;
+        }
+      }
+      if (slot) break;
+    }
+    if (!slot) {
+      this.flashTip('没有空位可以投预备队了');
+      return false;
+    }
+    const pos = this.cellCenter(slot.col, slot.row);
+    const sprite = this.add.image(pos.x, pos.y, textureKey(code, 'p')).setDisplaySize(64, 64);
+    const barBg = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x000000, 0.6).setOrigin(0, 0.5);
+    const bar = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x62c06a).setOrigin(0, 0.5);
+    sprite.setScale(0.6).setAlpha(0.2);
+    this.tweens.add({ targets: sprite, scaleX: 1, scaleY: 1, alpha: 1, duration: 220, ease: 'Back.easeOut' });
+    const index = this.battle.att.length;
+    this.placed.push({
+      id,
+      code,
+      col: slot.col,
+      row: slot.row,
+      side: 'p',
+      sprite,
+      bar,
+      barBg,
+      index,
+      men,
+      baseX: pos.x,
+      baseY: pos.y,
+      dead: false,
+      lastHp: 0
+    });
+    this.battle.addReserve({ code, men, id });
+    this.used.reserve = true;
+    this.flashBanner('预备队登场');
+    this.refreshHud();
+    return true;
+  }
+
+  private moveTo(u: Placed, x: number, y: number, col: number, row: number) {
+    u.col = col;
+    u.row = row;
+    u.baseX = x;
+    u.baseY = y;
+    const barY = y + 30;
+    this.tweens.add({ targets: u.sprite, x, y, duration: 260, ease: 'Quad.easeInOut' });
+    this.tweens.add({ targets: [u.bar, u.barBg], x: x - BAR_W / 2, y: barY, duration: 260, ease: 'Quad.easeInOut' });
+  }
+
+  private flashBanner(text: string) {
+    const t = this.add
+      .text(LOGICAL.w / 2, FIELD.top + 4 * FIELD.cellH - 6, text, {
+        fontFamily: 'sans-serif',
+        fontSize: '12px',
+        color: '#e8d8a8',
+        backgroundColor: '#0b0d12cc',
+        padding: { x: 6, y: 3 }
+      })
+      .setOrigin(0.5)
+      .setDepth(50);
+    this.tweens.add({ targets: t, y: t.y - 18, alpha: 0, duration: 900, onComplete: () => t.destroy() });
   }
 
   /** 开战瞬间的列队踏步，告诉玩家“打起来了” */
@@ -222,14 +426,6 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  /** 调试用：立刻推进 n 个 tick（?tick=n 回归截图走这里） */
-  debugStep(n: number) {
-    if (!this.battle) return;
-    for (let i = 0; i < n && !this.battle.done; i += 1) this.battle.step();
-    this.syncUnits();
-    this.refreshHud();
-  }
-
   update(_time: number, delta: number) {
     if (!this.battle || this.battle.done) {
       this.syncUnits();
@@ -246,6 +442,16 @@ export class BattleScene extends Phaser.Scene {
     }
     this.syncUnits();
     this.refreshHud();
+    if (this.battle.done && !this.ended) {
+      this.ended = true;
+      const win = this.battle.winner() === 'att';
+      const survivors = this.battle.att.map((s) => ({
+        id: s.id,
+        men: Math.max(0, (s.men0 * Math.max(s.hp, 0)) / Math.max(s.hp0, 1))
+      }));
+      const ticks = this.battle.ticks;
+      this.time.delayedCall(600, () => this.onEnd?.({ win, survivors, ticks }));
+    }
   }
 
   /** 每一 tick 的动作表现：近战前冲、弓手放箭、受击闪光、伤亡飘字。规则全在 sim 里，这里只做表演。 */
@@ -296,7 +502,8 @@ export class BattleScene extends Phaser.Scene {
 
   private hitFlash(u: Placed) {
     if (u.dead) return;
-    u.sprite.setTint(0xff8f70);
+    // 受击只用提亮，不染红：红色会和敌兵配色冲突，分不清谁挨打
+    u.sprite.setTint(0xffe0c0);
     this.time.delayedCall(120, () => {
       if (!u.sprite.scene) return;
       if (u.dead) u.sprite.setTint(0x8a8fa0);
@@ -376,7 +583,8 @@ export class BattleScene extends Phaser.Scene {
     const cp = armyCp(this.playerComp());
     const left = this.playerComp().length;
     const enemyLeft = this.placed.filter((p) => p.side === 'e').length;
-    this.hud.setText(`T ${ticks}/150 · 我 ${left} · 敌 ${enemyLeft} · 战力 ${Math.round(cp)}`);
+    const horn = this.battle && this.battle.hornTicks > 0 ? ` · 冲锋号 ${this.battle.hornTicks}` : '';
+    this.hud.setText(`第 ${this.layer} 层 · T ${ticks}/150 · 我 ${left} · 敌 ${enemyLeft} · 战力 ${Math.round(cp)}${horn}`);
     if (this.battle && this.battle.done && !this.resultText) {
       const win = this.battle.winner();
       const remain = Math.round(this.battle.attRemain() * 100);
@@ -388,7 +596,8 @@ export class BattleScene extends Phaser.Scene {
           backgroundColor: '#0b0d12cc',
           padding: { x: 8, y: 4 }
         })
-        .setOrigin(0.5);
+        .setOrigin(0.5)
+        .setDepth(45);
     }
   }
 }
