@@ -1,0 +1,22 @@
+{
+  "name": "banner-war",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "竖屏兵牌战役 · 4x8 阵型战斗（Phaser 4 + TypeScript + Vite）",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "verify": "tsx scripts/verify.ts"
+  },
+  "dependencies": {
+    "phaser": "4.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
