@@ -10,19 +10,31 @@ import { BattleScene } from './game/BattleScene';
 const CARDS = ['A1', 'A2', 'B2', 'B2', 'C1'];
 const CHIP: Record<string, string> = { inf: '#6f8fc0', rng: '#7fa06a', cav: '#c08a5a' };
 
+function availableBox() {
+  // 用实际布局高度（clientHeight）而不是 innerHeight / 100vh：
+  // 手机浏览器工具栏、动态视口会让三者不一致，按大的算就会把舞台顶出屏幕、按钮被裁
+  const doc = document.documentElement;
+  const vv = window.visualViewport;
+  const w = Math.min(doc.clientWidth || window.innerWidth, vv ? vv.width : Infinity);
+  const h = Math.min(doc.clientHeight || window.innerHeight, vv ? vv.height : Infinity);
+  return { w, h };
+}
+
 function layout() {
-  const sx = Math.floor(window.innerWidth / LOGICAL.w);
-  const sy = Math.floor(window.innerHeight / LOGICAL.h);
-  const s = Math.max(1, Math.min(sx, sy));
+  const { w, h } = availableBox();
+  const raw = Math.min(w / LOGICAL.w, h / LOGICAL.h);
+  // 能整数倍就整数倍（像素不糊），放不下才降到小数倍——宁可略软也不能被裁
+  const s = raw >= 1 ? Math.floor(raw) : Math.max(0.5, raw);
   const root = document.documentElement;
-  root.style.setProperty('--stage-w', `${LOGICAL.w * s}px`);
-  root.style.setProperty('--stage-h', `${LOGICAL.h * s}px`);
-  root.style.setProperty('--hand-h', `${160 * s}px`);
+  root.style.setProperty('--stage-w', `${Math.round(LOGICAL.w * s)}px`);
+  root.style.setProperty('--stage-h', `${Math.round(LOGICAL.h * s)}px`);
+  root.style.setProperty('--hand-h', `${Math.round(Math.max(132, 160 * s))}px`);
 }
 
 layout();
 window.addEventListener('resize', layout);
 window.addEventListener('orientationchange', layout);
+window.visualViewport?.addEventListener('resize', layout);
 
 const battle = new BattleScene();
 
@@ -47,8 +59,9 @@ const ghost = document.getElementById('ghost')!;
 const startBtn = document.createElement('button');
 startBtn.textContent = '开战';
 startBtn.style.cssText =
-  'position:absolute;right:8px;top:6px;padding:6px 12px;border-radius:6px;border:1px solid #4a5a7a;' +
-  'background:#1b2432;color:#cfd6e6;font-size:12px;z-index:6;';
+  'position:absolute;right:10px;top:8px;padding:8px 14px;border-radius:8px;border:1px solid #4a5a7a;' +
+  'background:#1b2432;color:#cfd6e6;font-size:13px;line-height:1;min-height:34px;min-width:56px;' +
+  'touch-action:manipulation;z-index:6;';
 startBtn.addEventListener('click', () => {
   if (!battle.ready || battle.running) return;
   // 敌军在布阵阶段就摆好了，上一两张去打必输，先拦住并要求至少 3 张
