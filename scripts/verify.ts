@@ -3,7 +3,8 @@
  * 跑法：npm run verify
  */
 import { UNITS, order } from '../src/sim/units';
-import { armyFight, createBattle, duel } from '../src/sim/battle';
+import { armyFight, createBattle, duel, HORN_TICKS, HORN_MULT } from '../src/sim/battle';
+import { NODES, LAYER_FACTOR, enemyFor, recruitOffer, newRun, supplyCost, supply } from '../src/run/state';
 
 let failures = 0;
 function check(label: string, actual: string, expected: string) {
@@ -65,6 +66,96 @@ console.log('\n— 确定性（同输入三次必须同结果）—');
   const r2 = run();
   const r3 = run();
   check('三次结果一致', String(r1 === r2 && r2 === r3), 'true');
+}
+
+console.log('\n— S2 战中三动作 —');
+{
+  // 冲锋号：同一场战斗，前 6 tick 伤害必须吃到 1.45 倍，之后回落
+  const mk = (horn: boolean) => {
+    const bt = createBattle(
+      [{ code: 'A2', men: 30, id: 'p0' }],
+      [{ code: 'A2', men: 30, id: 'e0' }],
+      150
+    );
+    if (horn) bt.horn();
+    const dmg: number[] = [];
+    let prev = bt.dfn[0].hp;
+    for (let i = 0; i < 10 && !bt.done; i += 1) {
+      bt.step();
+      dmg.push(prev - bt.dfn[0].hp);
+      prev = bt.dfn[0].hp;
+    }
+    return { dmg, bt };
+  };
+  const base = mk(false);
+  const buffed = mk(true);
+  // 第 1 tick 双方都是满编，倍数可以直接比
+  check(`冲锋号首 tick 伤害 ×${HORN_MULT}`, String(Math.abs(buffed.dmg[0] / base.dmg[0] - HORN_MULT) < 0.01), 'true');
+  check(`冲锋号 ${HORN_TICKS} tick 后归零`, String(buffed.bt.hornTicks), '0');
+  // 只比同一条 run 内相邻 tick：失效那一下必须明显掉下来
+  const dropOk = buffed.dmg[HORN_TICKS] < buffed.dmg[HORN_TICKS - 1] * 0.9;
+  check('冲锋号结束后伤害回落', String(dropOk), 'true');
+  check('冲锋号只能用一次', String(buffed.bt.horn() === false), 'true');
+}
+{
+  // 变阵：最前排退到队尾，集火目标随之改变
+  const bt = createBattle(
+    [
+      { code: 'A1', men: 30, id: 'front' },
+      { code: 'A2', men: 30, id: 'second' },
+      { code: 'B2', men: 20, id: 'back' }
+    ],
+    [{ code: 'A3', men: 30, id: 'e0' }],
+    150
+  );
+  const beforeFront = bt.att[0].id;
+  bt.swapFrontBack();
+  check('变阵后队首换人', bt.att[0].id, 'second');
+  check('变阵后队尾是原前排', bt.att[bt.att.length - 1].id, beforeFront);
+  check('变阵顺序不乱', bt.att.map((s) => s.id).join(','), 'second,back,front');
+}
+{
+  // 投预备队：总血量基数变大、立刻参与结算
+  const bt = createBattle([{ code: 'A2', men: 30, id: 'p0' }], [{ code: 'A2', men: 30, id: 'e0' }], 150);
+  const hp0 = bt.attHp0Total();
+  const hp = bt.att[0].hp;
+  bt.addReserve({ code: 'B2', men: 20, id: 'r0' });
+  check('预备队进场后槽位+1', String(bt.att.length), '2');
+  check('总血量基数累加', String(bt.attHp0Total() === hp0 + 20 * 36), 'true');
+  check('原槽血量不变', String(bt.att[0].hp === hp), 'true');
+  while (!bt.done) bt.step();
+  check('预备队参与结算（战斗仍能收尾）', String(bt.done), 'true');
+}
+
+console.log('\n— S3 单局闭环 —');
+{
+  check('8 层节点表', NODES.join('>'), 'battle>recruit>battle>supply>battle>recruit>battle>boss');
+  const s = newRun();
+  check('开局银币', String(s.coins), '80');
+  check('开局部队', `${s.deck.length} 张`, '5 张');
+  check('补给价', String(supplyCost()), '60');
+
+  // 敌强随层上升，同一套牌每层都要打得更吃力
+  const deck = s.deck.map((c) => c.code);
+  const cp = [];
+  for (let i = 0; i < 8; i += 1) cp.push(enemyFor(i, deck).length);
+  check('每层都有敌人', String(cp.every((n) => n > 0)), 'true');
+  check('层强系数递增', String(LAYER_FACTOR.every((v, i) => i === 0 || v >= LAYER_FACTOR[i - 1])), 'true');
+
+  // 同层招募固定（否则读档出来的三选一会变）
+  const a = recruitOffer(2).map((o) => o.code).join(',');
+  const b = recruitOffer(2).map((o) => o.code).join(',');
+  check('同层招募固定', String(a === b), 'true');
+
+  // 补给：花 60 补员 30%，银币不够就不给买
+  const s2 = newRun();
+  s2.deck[0].men = 10;
+  check('补给成功', String(supply(s2)), 'true');
+  check('补给扣银币', String(s2.coins), '20');
+  check('补给回员', String(Math.round(s2.deck[0].men)), '19');
+  s2.coins = 10;
+  const before = s2.deck[0].men;
+  check('银币不足补给失败', String(supply(s2) === false && s2.deck[0].men === before), 'true');
 }
 
 console.log(`\n${failures === 0 ? '全部通过' : `${failures} 项未通过`}`);
