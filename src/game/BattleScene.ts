@@ -107,10 +107,10 @@ export class BattleScene extends Phaser.Scene {
     const sprite = this.add.image(pos.x, pos.y, textureKey(code, 'p')).setDisplaySize(64, 64);
     const barBg = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x000000, 0.6).setOrigin(0, 0.5);
     const bar = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x62c06a).setOrigin(0, 0.5);
-    // 落子反馈：透明度 0→1 并轻微上浮，落定后停在 alpha=1（早先这里带 yoyo，会淡回透明）
-    sprite.setAlpha(0);
-    sprite.setY(pos.y + 4);
-    this.tweens.add({ targets: sprite, alpha: 1, y: pos.y, duration: 160, ease: 'Quad.easeOut' });
+    // 落子反馈：0.85→1 的弹一下并轻微上浮。透明度不参与动画，避免任何一帧丢失导致兵牌不可见
+    sprite.setScale(0.85);
+    sprite.setY(pos.y + 3);
+    this.tweens.add({ targets: sprite, scaleX: 1, scaleY: 1, y: pos.y, duration: 160, ease: 'Quad.easeOut' });
     this.placed.push({ code, col, row, side: 'p', sprite, bar, barBg, index: -1 });
     this.tip.setVisible(false);
     this.refreshHud();
