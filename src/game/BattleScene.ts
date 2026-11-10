@@ -107,8 +107,10 @@ export class BattleScene extends Phaser.Scene {
     const sprite = this.add.image(pos.x, pos.y, textureKey(code, 'p')).setDisplaySize(64, 64);
     const barBg = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x000000, 0.6).setOrigin(0, 0.5);
     const bar = this.add.rectangle(pos.x - BAR_W / 2, pos.y + 30, BAR_W, 4, 0x62c06a).setOrigin(0, 0.5);
+    // 落子反馈：透明度 0→1 并轻微上浮，落定后停在 alpha=1（早先这里带 yoyo，会淡回透明）
     sprite.setAlpha(0);
-    this.tweens.add({ targets: sprite, alpha: 1, y: pos.y - 3, duration: 140, yoyo: true, ease: 'Quad.easeOut' });
+    sprite.setY(pos.y + 4);
+    this.tweens.add({ targets: sprite, alpha: 1, y: pos.y, duration: 160, ease: 'Quad.easeOut' });
     this.placed.push({ code, col, row, side: 'p', sprite, bar, barBg, index: -1 });
     this.tip.setVisible(false);
     this.refreshHud();
