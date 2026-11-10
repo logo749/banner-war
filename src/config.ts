@@ -2,8 +2,10 @@
  * 全局常量：所有数值只在这里定义一次，画面与结算都读它。
  */
 
-/** 逻辑分辨率（像素层的基准）。宽度 360 是为了在 390–430 CSS px 的手机上能整数倍 1:1 铺满。 */
-export const LOGICAL = { w: 360, h: 780 } as const;
+/** 逻辑分辨率（像素层的基准）。宽度 360 是为了在 390–430 CSS px 的手机上能整数倍 1:1 铺满。
+ *  高度 840 = 记分栏 40 + 8 行×70 格 560 + 底部留给动作条的 240：
+ *  原来 780 时，手牌（132–160）+ 动作条（36）总高超过画布剩余空间，最下面一排兵牌会被按针遮住。 */
+export const LOGICAL = { w: 360, h: 840 } as const;
 
 /** 一个 tick 的秒数，与 GDD 定稿一致：单场上限 150 tick = 60 秒。 */
 export const TICK_SEC = 0.4;
@@ -14,7 +16,7 @@ export const SIEGE_MAX_TICK = 400;
 export const GRID = { cols: 4, rows: 8 } as const;
 
 /** 战场区：每格 90 × 70，8 行共 560。 */
-export const FIELD = { top: 56, cellW: 90, cellH: 70 } as const;
+export const FIELD = { top: 40, cellW: 90, cellH: 70 } as const;
 
 /** 玩家占第 6–8 行（索引 5–7），敌军自上压下。 */
 export const PLAYER_ROWS = [5, 6, 7];
