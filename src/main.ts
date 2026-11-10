@@ -1,13 +1,14 @@
 /**
- * 入口：算整数倍缩放、起 Phaser、把 DOM 手牌接到战场。
+ * 入口：算整数倍缩放、起 Phaser、接上「地图 → 布阵 → 战斗 → 结算 → 回地图」的局内循环。
  * 手牌走 DOM（设备分辨率），战场走 Phaser（逻辑分辨率），这正是 GDD 的「两套分辨率」。
  */
 import Phaser from 'phaser';
 import { FIELD, GRID, LOGICAL } from './config';
 import { UNITS } from './sim/units';
 import { BattleScene } from './game/BattleScene';
+import { renderMap } from './run/map';
+import { applyBattle, clearRun, enemyFor, loadRun, newRun, NODES, saveRun, supply, type RunState } from './run/state';
 
-const CARDS = ['A1', 'A2', 'B2', 'B2', 'C1'];
 const CHIP: Record<string, string> = { inf: '#6f8fc0', rng: '#7fa06a', cav: '#c08a5a' };
 
 function availableBox() {
@@ -51,62 +52,191 @@ const game = new Phaser.Game({
 });
 void game;
 
+const stage = document.getElementById('stage')!;
 const canvasHost = document.getElementById('canvas-host')!;
 const hand = document.getElementById('hand')!;
 const ghost = document.getElementById('ghost')!;
 
-// ---- 开战按钮 ----
-const startBtn = document.createElement('button');
-startBtn.textContent = '开战';
-startBtn.style.cssText =
-  'position:absolute;right:10px;top:8px;padding:8px 14px;border-radius:8px;border:1px solid #4a5a7a;' +
-  'background:#1b2432;color:#cfd6e6;font-size:13px;line-height:1;min-height:34px;min-width:56px;' +
-  'touch-action:manipulation;z-index:6;';
-startBtn.addEventListener('click', () => {
-  if (!battle.ready || battle.running) return;
-  // 敌军在布阵阶段就摆好了，上一两张去打必输，先拦住并要求至少 3 张
+// ---- 地图层 ----
+const mapHost = document.createElement('div');
+mapHost.style.cssText = 'position:absolute;inset:0;z-index:9;display:none;';
+stage.appendChild(mapHost);
+
+// ---- 动作条：变阵 / 预备队 / 冲锋号 / 开战 ----
+const actionBar = document.createElement('div');
+actionBar.style.cssText =
+  'position:absolute;left:0;right:0;bottom:var(--hand-h);height:36px;display:none;align-items:center;' +
+  'justify-content:space-between;gap:6px;padding:0 8px;box-sizing:border-box;z-index:7;' +
+  'background:linear-gradient(180deg,rgba(9,11,16,0),rgba(9,11,16,0.82));';
+stage.appendChild(actionBar);
+
+function mkAct(text: string, onClick: () => void) {
+  const b = document.createElement('button');
+  b.textContent = text;
+  b.style.cssText =
+    'flex:0 0 auto;padding:6px 9px;border-radius:7px;border:1px solid #4a5a7a;background:#1b2432;' +
+    'color:#cfd6e6;font-size:11px;line-height:1.2;min-height:28px;touch-action:manipulation;';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+const btnSwap = mkAct('变阵', () => {
+  if (!battle.running) return;
+  if (battle.swap()) refreshActions();
+});
+const btnReserve = mkAct('预备队', () => {
+  if (!battle.running) return;
+  const next = deck.find((c) => !placedIds.has(c.id));
+  if (!next) {
+    battle.flashTip('没有预备的兵牌了');
+    return;
+  }
+  if (battle.addReserve(next.id, next.code, next.men)) {
+    placedIds.add(next.id);
+    placedIds.add(next.id);
+    syncHandUsed();
+    refreshActions();
+  }
+});
+const btnHorn = mkAct('冲锋号', () => {
+  if (!battle.running) return;
+  if (battle.horn()) refreshActions();
+});
+const startBtn = mkAct('开战', () => {
+  if (!battle.ready || battle.running || battle.finished) return;
   if (battle.playerCount() < 3) {
     battle.flashTip(`至少上 3 张兵牌（现在 ${battle.playerCount()} 张）`);
     return;
   }
   battle.start();
-  startBtn.disabled = true;
-  startBtn.style.opacity = '0.45';
+  refreshActions();
 });
-document.getElementById('stage')!.appendChild(startBtn);
+startBtn.style.cssText += 'border-color:#d8a566;background:#2a2318;color:#f0d8a8;font-size:12px;padding:6px 14px;';
 
-// ---- 手牌 ----
-interface CardView {
+actionBar.append(btnSwap, btnReserve, btnHorn, startBtn);
+
+function refreshActions() {
+  const lock = battle.running || battle.finished;
+  startBtn.textContent = battle.running ? '交战中' : battle.finished ? '已结束' : '开战';
+  startBtn.disabled = lock;
+  btnSwap.disabled = !battle.canSwap();
+  btnReserve.disabled = !battle.canReserve();
+  btnHorn.disabled = !battle.canHorn();
+  for (const b of [btnSwap, btnReserve, btnHorn, startBtn]) b.style.opacity = b.disabled ? '0.45' : '1';
+  syncHandUsed();
+}
+
+// ---- 局内状态 ----
+let run: RunState = loadRun() ?? newRun();
+let deck = run.deck;
+const placedIds = new Set<string>();
+
+interface HandCard {
+  id: string;
   code: string;
   el: HTMLDivElement;
   used: boolean;
 }
+const handCards: HandCard[] = [];
 
-const cards: CardView[] = CARDS.map((code) => {
-  const el = document.createElement('div');
-  el.className = 'card';
-  const u = UNITS[code];
-  const chip = document.createElement('div');
-  chip.style.cssText = `width:26px;height:6px;border-radius:3px;background:${CHIP[u.line]};margin:6px 0 4px;`;
-  const name = document.createElement('div');
-  name.textContent = u.name;
-  const men = document.createElement('div');
-  men.textContent = `${u.men} 人`;
-  men.style.color = '#7d879c';
-  el.append(chip, name, men);
-  hand.appendChild(el);
-  return { code, el, used: false };
-});
+function renderHand() {
+  hand.innerHTML = '';
+  handCards.length = 0;
+  for (const card of deck) {
+    const el = document.createElement('div');
+    el.className = 'card';
+    const u = UNITS[card.code];
+    const chip = document.createElement('div');
+    chip.style.cssText = `width:26px;height:6px;border-radius:3px;background:${CHIP[u.line]};margin:6px 0 4px;`;
+    const name = document.createElement('div');
+    name.textContent = u.name;
+    const men = document.createElement('div');
+    men.textContent = `${Math.round(card.men)}/${u.men}`;
+    men.style.color = '#7d879c';
+    el.append(chip, name, men);
+    hand.appendChild(el);
+    handCards.push({ id: card.id, code: card.code, el, used: false });
+  }
+  syncHandUsed();
+}
 
-let selected: CardView | null = null;
-function select(card: CardView | null) {
-  cards.forEach((c) => c.el.classList.toggle('selected', c === card));
-  selected = card;
+function syncHandUsed() {
+  for (const c of handCards) {
+    c.used = placedIds.has(c.id) || battle.running || battle.finished;
+    c.el.style.opacity = placedIds.has(c.id) ? '0.25' : battle.running || battle.finished ? '0.55' : '1';
+  }
+}
+
+// ---- 屏幕切换 ----
+function showMap() {
+  mapHost.style.display = 'block';
+  actionBar.style.display = 'none';
+  hand.style.display = 'none';
+  ghost.style.display = 'none';
+  renderMap(mapHost, run, {
+    onEnter: advanceNode,
+    onRecruit: (code, price) => {
+      if (run.coins < price) return;
+      run.coins -= price;
+      run.deck.push({ id: `c${run.seq++}`, code, men: UNITS[code].men });
+      run.layer += 1;
+      deck = run.deck;
+      saveRun(run);
+      showMap();
+    },
+    onSupply: () => {
+      supply(run);
+      run.layer += 1;
+      deck = run.deck;
+      saveRun(run);
+      showMap();
+    },
+    onRestart: () => {
+      const fame = run.fame;
+      clearRun();
+      run = newRun(fame);
+      deck = run.deck;
+      saveRun(run);
+      showMap();
+    }
+  });
+}
+
+/** 当前节点：战斗就进战场，募兵/补给就直接推进一层 */
+function advanceNode() {
+  const kind = NODES[Math.min(run.layer, NODES.length - 1)];
+  if (kind === 'battle' || kind === 'boss') {
+    enterBattle();
+    return;
+  }
+  run.layer += 1;
+  saveRun(run);
+  showMap();
+}
+
+function enterBattle() {
+  mapHost.style.display = 'none';
+  actionBar.style.display = 'flex';
+  hand.style.display = 'flex';
+  placedIds.clear();
+  deck = run.deck;
+  renderHand();
+  battle.reset(enemyFor(run.layer, deck), run.layer + 1, (r) => {
+    applyBattle(run, r.win, r.survivors);
+    saveRun(run);
+    deck = run.deck;
+    refreshActions();
+    setTimeout(() => {
+      renderHand();
+      showMap();
+    }, 600);
+  });
+  refreshActions();
 }
 
 // ---- 拖拽 / 点选 ----
 interface DragState {
-  card: CardView;
+  card: HandCard;
   startX: number;
   startY: number;
   long: boolean;
@@ -114,6 +244,12 @@ interface DragState {
   moved: boolean;
 }
 let drag: DragState | null = null;
+let selected: HandCard | null = null;
+
+function select(card: HandCard | null) {
+  handCards.forEach((c) => c.el.classList.toggle('selected', c === card));
+  selected = card;
+}
 
 function endDrag() {
   if (drag) window.clearTimeout(drag.timer);
@@ -132,38 +268,42 @@ function cellFromPoint(clientX: number, clientY: number) {
   return { col, row };
 }
 
-function tryPlace(card: CardView, clientX: number, clientY: number) {
+function tryPlace(card: HandCard, clientX: number, clientY: number) {
   const cell = cellFromPoint(clientX, clientY);
   if (!cell) return false;
-  if (!battle.ready) return false;
-  if (!battle.placePlayer(card.code, cell.col, cell.row)) return false;
-  card.used = true;
-  card.el.style.opacity = '0.25';
+  if (!battle.ready || battle.running || battle.finished) return false;
+  const entry = deck.find((c) => c.id === card.id);
+  if (!entry) return false;
+  if (!battle.placePlayer(card.code, cell.col, cell.row, card.id, entry.men)) return false;
+  placedIds.add(card.id);
   card.el.classList.remove('selected');
   selected = null;
+  syncHandUsed();
+  refreshActions();
   return true;
 }
 
-cards.forEach((card) => {
-  card.el.addEventListener('pointerdown', (e) => {
-    if (card.used || battle.running) return;
-    e.preventDefault();
-    select(card);
-    drag = {
-      card,
-      startX: e.clientX,
-      startY: e.clientY,
-      long: false,
-      moved: false,
-      timer: window.setTimeout(() => {
-        if (!drag) return;
-        drag.long = true;
-        ghost.style.display = 'block';
-        ghost.style.left = `${e.clientX}px`;
-        ghost.style.top = `${e.clientY}px`;
-      }, 300)
-    };
-  });
+hand.addEventListener('pointerdown', (e) => {
+  const target = (e.target as HTMLElement).closest('.card') as HTMLDivElement | null;
+  if (!target) return;
+  const card = handCards.find((c) => c.el === target);
+  if (!card || card.used || battle.running) return;
+  e.preventDefault();
+  select(card);
+  drag = {
+    card,
+    startX: e.clientX,
+    startY: e.clientY,
+    long: false,
+    moved: false,
+    timer: window.setTimeout(() => {
+      if (!drag) return;
+      drag.long = true;
+      ghost.style.display = 'block';
+      ghost.style.left = `${e.clientX}px`;
+      ghost.style.top = `${e.clientY}px`;
+    }, 300)
+  };
 });
 
 window.addEventListener(
@@ -199,28 +339,34 @@ document.getElementById('input-layer')!.addEventListener('pointerup', (e) => {
   tryPlace(selected, e.clientX, e.clientY);
 });
 
-// ---- 演示模式：?demo=1 自动布阵并开战，用于回归截图 ----
-if (new URLSearchParams(location.search).get('demo') === '1') {
-  const formation: Array<{ code: string; col: number; row: number }> = [
-    { code: 'A1', col: 1, row: 5 },
-    { code: 'A2', col: 2, row: 5 },
-    { code: 'B2', col: 0, row: 6 },
-    { code: 'B2', col: 3, row: 6 },
-    { code: 'C1', col: 1, row: 7 }
-  ];
+// ---- 首屏 ----
+renderHand();
+showMap();
+
+// ---- 演示模式：?demo=battle 自动布阵开战，用于回归截图 ----
+const params = new URLSearchParams(location.search);
+if (params.get('demo') === 'battle') {
+  const want = Number(params.get('layer') ?? '1');
   const boot = () => {
     if (!battle.ready) {
       requestAnimationFrame(boot);
       return;
     }
-    formation.forEach((f) => battle.placePlayer(f.code, f.col, f.row));
-    cards.forEach((c) => {
-      c.used = true;
-      c.el.style.opacity = '0.25';
+    run.layer = Math.min(Math.max(want - 1, 0), 7);
+    deck = run.deck;
+    enterBattle();
+    const formation: Array<{ code: string; col: number; row: number; men: number }> = [
+      { code: 'A1', col: 1, row: 5, men: 30 },
+      { code: 'A2', col: 2, row: 5, men: 30 },
+      { code: 'B2', col: 0, row: 6, men: 20 },
+      { code: 'B2', col: 3, row: 6, men: 20 },
+      { code: 'C1', col: 1, row: 7, men: 10 }
+    ];
+    formation.forEach((f, i) => {
+      battle.placePlayer(f.code, f.col, f.row, `d${i}`, f.men);
     });
     battle.start();
-    const n = Number(new URLSearchParams(location.search).get('tick') ?? '0');
-    if (n > 0) battle.debugStep(n);
+    refreshActions();
   };
   boot();
 }
