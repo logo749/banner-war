@@ -1,21 +1,9 @@
-# 素材放置说明
+---
 
-这个目录只放**切好的图集**，不放原始素材包（Tiny Swords 等许可禁止再分发，原始包已被 `.gitignore` 忽略）。
+## 素材管线
 
-```
-public/assets/
-  tiny-swords/     主单位与地形、UI
-  mtpixls/         骑兵与枪兵（按 Tiny Swords 调色板重着色）
-  castle/          第 8 层攻城用的城墙与城门
-  kenney/          UI 元素与音效（CC0）
-```
-
-当前版本还没接素材，战场上的兵由 `src/game/textures.ts` 用代码生成 64×64 占位图。
-接素材的步骤：
-
-1. 从 itch 页手动领取并解压到上表目录（原始包放 `raw/`，该目录不进 git）。
-2. 切片成 64×64 图集，导出 `*.png` + `*.json`（Aseprite / TexturePacker 皆可），`*.aseprite` 不进 git。
-3. 修改 `src/game/textures.ts`：把 `generateTexture(...)` 换成 `this.load.atlas(...)` + `this.add.image(key)`。
-4. 更新 `docs/assets.md` 的署名区与设置页署名。
-
-素材许可见 [../docs/assets.md](../docs/assets.md)。
+- 源：Tiny Swords（Pixel Frog，CC0），镜像仓库 `Hdisa/Tiny-Swords`，192px 帧网格的 `Warrior/Archer` 图集。
+- 生成：`python3 tools/units_art.py --src <本地图集目录>` → 切帧、按「一队人」排版（步兵 3 人 / 弓手 2 人 / 骑兵 1 骑）、`trim()` 裁透明边 → 写 `public/assets/units/*.png` 与 `public/assets/terrain/ground.png`。
+- 骑兵：免费包里没有骑乘单位，用骑士上半身 + 自绘俯视马体合成。
+- 草地：`Tilemap_Flat.png` 的砖 60×64 不可无缝，改为在 3×3 画布随机撒草簇按 64 周期复制，取中间格。
+- 二进制不进 git：PNG 以 base64 存在 `assets/unitArt.json`，`scripts/write-assets.mjs` 在 `predev`/`prebuild` 还原。
