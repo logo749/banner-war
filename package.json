@@ -6,9 +6,12 @@
   "description": "竖屏兵牌战役 · 4x8 阵型战斗（Phaser 4 + TypeScript + Vite）",
   "scripts": {
     "dev": "vite --host",
+    "predev": "node scripts/write-assets.mjs",
     "build": "tsc --noEmit && vite build",
+    "prebuild": "node scripts/write-assets.mjs",
     "preview": "vite preview --host",
-    "verify": "tsx scripts/verify.ts"
+    "verify": "tsx scripts/verify.ts",
+    "art": "python3 tools/units_art.py"
   },
   "dependencies": {
     "phaser": "4.2.1"

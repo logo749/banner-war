@@ -2,7 +2,9 @@ node_modules/
 dist/
 *.log
 .DS_Store
+.cache/
 
-# 免费素材的原始包不进仓库（Tiny Swords 等许可禁止再分发）
 public/assets/**/raw/
-*.aseprite
+# 兵牌 / 地面 PNG 由 tools/units_art.py 生成（构建前自动跑），二进制不进仓库
+public/assets/units/*.png
+public/assets/terrain/*.png
